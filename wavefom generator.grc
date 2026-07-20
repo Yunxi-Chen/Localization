@@ -1,0 +1,451 @@
+options:
+  parameters:
+    alias: ''
+    author: ''
+    catch_exceptions: 'True'
+    comment: ''
+    copyright: ''
+    description: ''
+    gen_linking: dynamic
+    generate_options: no_gui
+    generator_class_name: PythonNoGuiGenerator
+    generator_module: gnuradio.grc.workflows.python_nogui
+    hier_block_src_path: '.:'
+    id: wavefom_generator
+    max_nouts: '0'
+    output_language: python
+    realtime_scheduling: ''
+    run_command: '{python} -u {filename}'
+    run_options: prompt
+    thread_safe_setters: ''
+    title: Not titled yet
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [8, 8]
+    rotation: 0
+    state: enabled
+
+blocks:
+- name: file_path_1
+  id: variable
+  parameters:
+    comment: ''
+    value: '"/home/marco/Downloads/Localization/my_5g_prs_mu1_nID100_30.72M_Simplified.bin"'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [336, 12.0]
+    rotation: 0
+    state: true
+- name: file_path_2
+  id: variable
+  parameters:
+    comment: ''
+    value: '"/home/marco/Downloads/Localization/my_5g_prs_mu1_nID200_30.72M_Simplified.bin"'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [512, 12.0]
+    rotation: 0
+    state: true
+- name: samp_rate
+  id: variable
+  parameters:
+    comment: ''
+    value: 122.88e6
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [224, 12.0]
+    rotation: 0
+    state: enabled
+- name: blocks_file_meta_sink_0
+  id: blocks_file_meta_sink
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    detached: 'False'
+    extra_dict: pmt.make_dict()
+    file: /dev/shm/ch0.bin
+    max_seg_size: '400000000'
+    rel_rate: '1'
+    samp_rate: samp_rate
+    type: complex
+    unbuffered: 'False'
+    vlen: '1'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [928, 52.0]
+    rotation: 0
+    state: disabled
+- name: blocks_file_meta_sink_1
+  id: blocks_file_meta_sink
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    detached: 'False'
+    extra_dict: pmt.make_dict()
+    file: /dev/shm/ch1.bin
+    max_seg_size: '400000000'
+    rel_rate: '1'
+    samp_rate: samp_rate
+    type: complex
+    unbuffered: 'False'
+    vlen: '1'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [928, 292.0]
+    rotation: 0
+    state: disabled
+- name: blocks_file_sink_0
+  id: blocks_file_sink
+  parameters:
+    affinity: ''
+    alias: ''
+    append: 'False'
+    comment: ''
+    file: /home/marco/Downloads/Localization/ch0_1.bin
+    type: complex
+    unbuffered: 'False'
+    vlen: '1'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [936, 164.0]
+    rotation: 0
+    state: enabled
+- name: blocks_file_sink_0_0
+  id: blocks_file_sink
+  parameters:
+    affinity: ''
+    alias: ''
+    append: 'False'
+    comment: ''
+    file: /home/marco/Downloads/Localization/ch1_1.bin
+    type: complex
+    unbuffered: 'False'
+    vlen: '1'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [936, 260.0]
+    rotation: 0
+    state: enabled
+- name: blocks_file_sink_0_0_0
+  id: blocks_file_sink
+  parameters:
+    affinity: ''
+    alias: ''
+    append: 'False'
+    comment: ''
+    file: /home/marco/Downloads/Localization/ch2_1.bin
+    type: complex
+    unbuffered: 'False'
+    vlen: '1'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [936, 348.0]
+    rotation: 0
+    state: enabled
+- name: blocks_file_sink_0_0_1
+  id: blocks_file_sink
+  parameters:
+    affinity: ''
+    alias: ''
+    append: 'False'
+    comment: ''
+    file: /home/marco/Downloads/Localization/ch3_1.bin
+    type: complex
+    unbuffered: 'False'
+    vlen: '1'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [936, 444.0]
+    rotation: 0
+    state: enabled
+- name: blocks_head_0
+  id: blocks_head
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    num_items: '122880000'
+    type: complex
+    vlen: '1'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [672, 196.0]
+    rotation: 0
+    state: enabled
+- name: blocks_head_0_0
+  id: blocks_head
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    num_items: '122880000'
+    type: complex
+    vlen: '1'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [672, 268.0]
+    rotation: 0
+    state: enabled
+- name: blocks_head_0_0_0
+  id: blocks_head
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    num_items: '122880000'
+    type: complex
+    vlen: '1'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [672, 452.0]
+    rotation: 0
+    state: enabled
+- name: blocks_head_0_1
+  id: blocks_head
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    num_items: '122880000'
+    type: complex
+    vlen: '1'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [672, 356.0]
+    rotation: 0
+    state: enabled
+- name: blocks_throttle2_0
+  id: blocks_throttle2
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    ignoretag: 'True'
+    limit: auto
+    maximum: '0.1'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    samples_per_second: samp_rate
+    type: complex
+    vlen: '1'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [368, 188.0]
+    rotation: 0
+    state: enabled
+- name: blocks_throttle2_0_0
+  id: blocks_throttle2
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    ignoretag: 'True'
+    limit: auto
+    maximum: '0.1'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    samples_per_second: samp_rate
+    type: complex
+    vlen: '1'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [368, 284.0]
+    rotation: 0
+    state: enabled
+- name: blocks_throttle2_0_0_0
+  id: blocks_throttle2
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    ignoretag: 'True'
+    limit: auto
+    maximum: '0.1'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    samples_per_second: samp_rate
+    type: complex
+    vlen: '1'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [368, 356.0]
+    rotation: 0
+    state: enabled
+- name: blocks_throttle2_0_0_1
+  id: blocks_throttle2
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    ignoretag: 'True'
+    limit: auto
+    maximum: '0.1'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    samples_per_second: samp_rate
+    type: complex
+    vlen: '1'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [368, 452.0]
+    rotation: 0
+    state: enabled
+- name: epy_block_0
+  id: epy_block
+  parameters:
+    _source_code: "\"\"\"\nEmbedded Python Blocks:\n\nEach time this file is saved,\
+      \ GRC will instantiate the first class it finds\nto get ports and parameters\
+      \ of your block. The arguments to __init__  will\nbe the parameters. All of\
+      \ them are required to have default values!\n\"\"\"\n\nimport numpy as np\n\
+      from gnuradio import gr\nimport os\n\nclass blk(gr.sync_block):\n    def __init__(self,\
+      \ \n                 file_path_1=\"/home/marco/Downloads/my_5g_prs_mu1_nID100_1s_30.72M.bin\"\
+      ,\n                 file_path_2=\"/home/marco/Downloads/my_5g_prs_mu1_nID200_1s_30.72M.bin\"\
+      ,\n                 file_path_3=\"/home/marco/Downloads/my_5g_prs_mu1_nID300_1s_30.72M.bin\"\
+      ,\n                 file_path_4=\"/home/marco/Downloads/my_5g_prs_mu1_nID400_1s_30.72M.bin\"\
+      ):\n        \"\"\"\n        Custom block to implement 5G 4-Channel PRS TDM +\
+      \ CDM.\n        Expanded to 4 output ports for dual-USRP (4 TX) transmission.\n\
+      \        \"\"\"\n        gr.sync_block.__init__(\n            self,\n      \
+      \      name='5G 4-Ch MIMO PRS Muting',\n            in_sig=None,\n         \
+      \   out_sig=[np.complex64, np.complex64, np.complex64, np.complex64] # Now outputs\
+      \ 4 channels\n        )\n        \n        # Define the exact length of ONE\
+      \ slot\n        self.slot_len = int(30.72e6 * 0.0005) # Exactly 15,360 samples\n\
+      \        \n        # 1. Load the data dynamically\n        def load_file(path):\n\
+      \            if os.path.exists(path):\n                data = np.fromfile(path,\
+      \ dtype=np.complex64)\n                duration = len(data) / 30.72e6\n    \
+      \            print(f\"[PRS Muting] Loaded {len(data)} samples ({duration:.2f}\
+      \ seconds) from {os.path.basename(path)}\")\n                return data\n \
+      \           else:\n                print(f\"[PRS Muting] ERROR: File {path}\
+      \ not found!\")\n                return np.array([], dtype=np.complex64)\n\n\
+      \        raw_prs_1 = load_file(file_path_1)\n        raw_prs_2 = load_file(file_path_2)\n\
+      \        raw_prs_3 = load_file(file_path_3)\n        raw_prs_4 = load_file(file_path_4)\n\
+      \            \n        # Set the frame length to the maximum length of all files\n\
+      \        self.frame_len = max(len(raw_prs_1), len(raw_prs_2), len(raw_prs_3),\
+      \ len(raw_prs_4))\n        if self.frame_len == 0:\n            self.frame_len\
+      \ = 1024 # Fallback to prevent crash if files are missing\n            \n  \
+      \      # Pad arrays to equal length just in case they differ\n        self.raw_prs_1\
+      \ = np.pad(raw_prs_1, (0, self.frame_len - len(raw_prs_1)))\n        self.raw_prs_2\
+      \ = np.pad(raw_prs_2, (0, self.frame_len - len(raw_prs_2)))\n        self.raw_prs_3\
+      \ = np.pad(raw_prs_3, (0, self.frame_len - len(raw_prs_3)))\n        self.raw_prs_4\
+      \ = np.pad(raw_prs_4, (0, self.frame_len - len(raw_prs_4)))\n        \n    \
+      \    # ---------------------------------------------------------------------\n\
+      \        # 2. ABSOLUTE ZERO MUTING INITIALIZATION (METHOD 3)\n        # ---------------------------------------------------------------------\n\
+      \        print(\"[PRS Muting] Initializing Absolute Zero Background for 4 Channels...\"\
+      )\n        \n        self.ch0_data = np.zeros(self.frame_len, dtype=np.complex64)\n\
+      \        self.ch1_data = np.zeros(self.frame_len, dtype=np.complex64)\n    \
+      \    self.ch2_data = np.zeros(self.frame_len, dtype=np.complex64)\n        self.ch3_data\
+      \ = np.zeros(self.frame_len, dtype=np.complex64)\n        \n        # ---------------------------------------------------------------------\n\
+      \        # 3. Apply the 4-Slot Masking Pattern across the ENTIRE file\n    \
+      \    # ---------------------------------------------------------------------\n\
+      \        print(\"[PRS Muting] Applying 4-Channel TDM slot masking pattern...\"\
+      )\n        num_slots = int(np.ceil(self.frame_len / self.slot_len))\n      \
+      \  for i in range(num_slots):\n            start_idx = i * self.slot_len\n \
+      \           end_idx = min((i + 1) * self.slot_len, self.frame_len)\n       \
+      \     \n            pattern_idx = i % 4\n            if pattern_idx == 0:\n\
+      \                self.ch0_data[start_idx:end_idx] = self.raw_prs_1[start_idx:end_idx]\n\
+      \            elif pattern_idx == 1:\n                self.ch1_data[start_idx:end_idx]\
+      \ = self.raw_prs_2[start_idx:end_idx]\n            elif pattern_idx == 2:\n\
+      \                self.ch2_data[start_idx:end_idx] = self.raw_prs_3[start_idx:end_idx]\n\
+      \            elif pattern_idx == 3:\n                self.ch3_data[start_idx:end_idx]\
+      \ = self.raw_prs_4[start_idx:end_idx]\n            \n        self.sample_idx\
+      \ = 0\n        print(\"[PRS Muting] Initialization Complete. Ready to transmit\
+      \ 4 channels.\")\n\n    def work(self, input_items, output_items):\n       \
+      \ out0 = output_items[0]\n        out1 = output_items[1]\n        out2 = output_items[2]\n\
+      \        out3 = output_items[3]\n        n = len(out0)\n        \n        idx\
+      \ = 0\n        while idx < n:\n            current_pos = self.sample_idx % self.frame_len\n\
+      \            chunk = min(n - idx, self.frame_len - current_pos)\n          \
+      \  \n            # Ultra-fast memory slicing for all 4 output channels\n   \
+      \         out0[idx : idx+chunk] = self.ch0_data[current_pos : current_pos+chunk]\n\
+      \            out1[idx : idx+chunk] = self.ch1_data[current_pos : current_pos+chunk]\n\
+      \            out2[idx : idx+chunk] = self.ch2_data[current_pos : current_pos+chunk]\n\
+      \            out3[idx : idx+chunk] = self.ch3_data[current_pos : current_pos+chunk]\n\
+      \            \n            self.sample_idx += chunk\n            idx += chunk\n\
+      \            \n        return n\n"
+    affinity: ''
+    alias: ''
+    comment: ''
+    file_path_1: '"/home/marco/Downloads/Localization/my_5g_prs_mu1_nID100_1s_122.88M.bin"'
+    file_path_2: '"/home/marco/Downloads/Localization/my_5g_prs_mu1_nID200_1s_122.88M.bin"'
+    file_path_3: '"/home/marco/Downloads/Localization/my_5g_prs_mu1_nID300_1s_122.88M.bin"'
+    file_path_4: '"/home/marco/Downloads/Localization/my_5g_prs_mu1_nID400_1s_122.88M.bin"'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+  states:
+    _io_cache: ('5G 4-Ch MIMO PRS Muting', 'blk', [('file_path_1', "'/home/marco/Downloads/my_5g_prs_mu1_nID100_1s_30.72M.bin'"),
+      ('file_path_2', "'/home/marco/Downloads/my_5g_prs_mu1_nID200_1s_30.72M.bin'"),
+      ('file_path_3', "'/home/marco/Downloads/my_5g_prs_mu1_nID300_1s_30.72M.bin'"),
+      ('file_path_4', "'/home/marco/Downloads/my_5g_prs_mu1_nID400_1s_30.72M.bin'")],
+      [], [('0', 'complex', 1), ('1', 'complex', 1), ('2', 'complex', 1), ('3', 'complex',
+      1)], '\n        Custom block to implement 5G 4-Channel PRS TDM + CDM.\n        Expanded
+      to 4 output ports for dual-USRP (4 TX) transmission.\n        ', [])
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [40, 232.0]
+    rotation: 0
+    state: true
+
+connections:
+- [blocks_head_0, '0', blocks_file_meta_sink_0, '0']
+- [blocks_head_0, '0', blocks_file_sink_0, '0']
+- [blocks_head_0_0, '0', blocks_file_meta_sink_1, '0']
+- [blocks_head_0_0, '0', blocks_file_sink_0_0, '0']
+- [blocks_head_0_0_0, '0', blocks_file_sink_0_0_1, '0']
+- [blocks_head_0_1, '0', blocks_file_sink_0_0_0, '0']
+- [blocks_throttle2_0, '0', blocks_head_0, '0']
+- [blocks_throttle2_0_0, '0', blocks_head_0_0, '0']
+- [blocks_throttle2_0_0_0, '0', blocks_head_0_1, '0']
+- [blocks_throttle2_0_0_1, '0', blocks_head_0_0_0, '0']
+- [epy_block_0, '0', blocks_throttle2_0, '0']
+- [epy_block_0, '1', blocks_throttle2_0_0, '0']
+- [epy_block_0, '2', blocks_throttle2_0_0_0, '0']
+- [epy_block_0, '3', blocks_throttle2_0_0_1, '0']
+
+metadata:
+  file_format: 1
+  grc_version: 3.10.12.0
