@@ -1,7 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.fft import fft, ifft, ifftshift
-from scipy.signal import correlate, find_peaks
+from scipy.signal import correlate
 
 # ==========================================
 # 1. 5G PRS WAVEFORM GENERATION FUNCTIONS
@@ -12,8 +12,7 @@ def generate_prs_sequence(n_res, c_init):
     seq_length = n_bits + Nc
     x1, x2 = np.zeros(seq_length, dtype=int), np.zeros(seq_length, dtype=int)
     x1[0] = 1
-    for i in range(31): 
-        x2[i] = (c_init >> i) & 1
+    for i in range(31): x2[i] = (c_init >> i) & 1
     for n in range(seq_length - 31):
         x1[n+31] = (x1[n+3] + x1[n]) % 2
         x2[n+31] = (x2[n+3] + x2[n+2] + x2[n+1] + x2[n]) % 2
@@ -56,7 +55,7 @@ def get_local_ref_half_subframe(n_id, hs_idx, n_fft, cp_first, cp_normal, n_res,
     return hs_waveform
 
 # ==========================================
-# 2. FREQUENCY-DOMAIN OVER-SAMPLING & PEAK DETECTION
+# 2. GLOBAL OAI ZERO-PADDING FUNCTION
 # ==========================================
 def global_zero_padding(signal, factor=10):
     """
@@ -74,27 +73,8 @@ def global_zero_padding(signal, factor=10):
     upsampled_signal = ifft(X_padded) * factor
     return upsampled_signal
 
-def extract_first_peak_in_window(window_data, threshold_ratio=0.7, min_dist=20):
-    """
-    Detects the FIRST peak exceeding threshold_ratio * max_val to isolate LoS.
-    Threshold is set to 70% (0.7) to ignore the ~53% structural ghost peak of PRS.
-    """
-    if len(window_data) == 0:
-        return 0
-    max_val = np.max(window_data)
-    if max_val == 0:
-        return 0
-    
-    # Search for peaks above 70% threshold
-    peaks, _ = find_peaks(window_data, height=max_val * threshold_ratio, distance=min_dist)
-    
-    if len(peaks) > 0:
-        return peaks[0]  # Return first peak exceeding threshold (True LoS)
-    
-    return np.argmax(window_data)  # Fallback to global max if no peak found
-
 # ==========================================
-# 3. CONFIGURATION & CALIBRATION
+# 3. CONFIGURATION 
 # ==========================================
 FS = 122.88e6
 HALF_SUBFRAME_LEN = 61440 
@@ -103,14 +83,6 @@ MU = 2
 K_OS = 10  # 10x Oversampling factor
 FS_OS = FS * K_OS  # 1.2288 GHz
 SPEED_OF_LIGHT = 299792458.0 
-
-# RF hardware calibration offsets (base offset: 205, cable delay: +3 samples)
-CALIBRATION_OFFSETS = {
-    100: 205.2,      # AP1 (Master)
-    200: 205.2 + 3,  # AP2 (with 5m RF cable compensation)
-    300: 205.2 + 3,  # AP3 (with 5m RF cable compensation)
-    400: 205.2       # AP4
-}
 
 # ==========================================
 # 4. DATA LOADING
@@ -123,7 +95,7 @@ rx_data = np.fromfile('/dev/shm/rx_wave_mu_2.bin', dtype=np.complex64,
                       offset=skip_samples * 8, count=search_samples)
 
 # ==========================================
-# 5. CORRELATION & PROCESSING (BLOCK-BASED SEARCH)
+# 5. CORRELATION AND OVERSAMPLING PROCESSING
 # ==========================================
 result_len = search_samples - HALF_SUBFRAME_LEN + 1
 result_len_os = result_len * K_OS
@@ -154,54 +126,47 @@ for ant_idx in range(4):
     corr_os[ant_idx] = np.abs(corr_os_complex)
 
 # ==========================================
-# 6. EXTRACT TOA AND DISTANCE (SIDE-BY-SIDE COMPARISON)
+# 6. EXTRACT AND COMPARE TOA/DISTANCE
 # ==========================================
-print("\n" + "="*95)
-print("EXTRACTING TOA AND DISTANCE (BLOCK SEARCH + 70% THRESHOLD + 10X OS + CALIBRATION)")
-print("="*95)
+print("\n" + "="*85)
+print("EXTRACTING TOA AND DISTANCE (RAW vs. 10X OVERSAMPLED COMPARISON)")
+print("="*85)
 
 for ant_idx in range(4):
-    nid = nIDs[ant_idx]
-    cal_offset = CALIBRATION_OFFSETS.get(nid, 0)
-    
     for hs_idx in hs_assignments[ant_idx]:
-        # Boundaries for Raw 1x Grid (0.5ms Block)
+        # Boundaries for Raw 1x Grid
         search_start = hs_idx * HALF_SUBFRAME_LEN
         search_end = min(search_start + HALF_SUBFRAME_LEN, result_len)
         
-        # Boundaries for Oversampled 10x Grid (0.5ms Block)
+        # Boundaries for Oversampled 10x Grid
         search_start_os = hs_idx * HALF_SUBFRAME_LEN * K_OS
         search_end_os = min(search_start_os + HALF_SUBFRAME_LEN * K_OS, result_len_os)
         
         if search_start < result_len:
-            # --- 1. Peak Extraction on RAW 1x Grid ---
+            # --- 1. Peak Extraction on RAW Grid ---
             window_data_raw = corr_raw[ant_idx][search_start:search_end]
             if len(window_data_raw) > 0:
-                rel_peak_raw = extract_first_peak_in_window(window_data_raw, threshold_ratio=0.6, min_dist=20)
-                true_delay_raw = rel_peak_raw - cal_offset
-                toa_sec_raw = true_delay_raw / FS
+                raw_peak_offset = np.argmax(window_data_raw)
+                toa_sec_raw = raw_peak_offset / FS
                 dist_raw = toa_sec_raw * SPEED_OF_LIGHT
                 
             # --- 2. Peak Extraction on 10x OVERSAMPLED Grid ---
             window_data_os = corr_os[ant_idx][search_start_os:search_end_os]
             if len(window_data_os) > 0:
-                # min_dist is scaled by K_OS (20 * 10 = 200) to protect the interpolated main lobe
-                rel_peak_os = extract_first_peak_in_window(window_data_os, threshold_ratio=0.6, min_dist=20 * K_OS)
-                
-                fine_rel_peak = rel_peak_os / K_OS  # Convert 10x index back to float base index
-                true_delay_fine = fine_rel_peak - cal_offset
-                toa_sec_fine = true_delay_fine / FS
+                os_peak_offset = np.argmax(window_data_os)
+                # Convert the 10x grid index back to the base 122.88MHz float format (e.g., 208.70)
+                fine_peak_offset = os_peak_offset / K_OS  
+                toa_sec_fine = fine_peak_offset / FS
                 dist_fine = toa_sec_fine * SPEED_OF_LIGHT
             
-            # --- 3. Output Comparison ---
+            # --- 3. Print Side-by-Side Comparison ---
             if hs_idx < 16:
-                print(f"Antenna {ant_labels[ant_idx]} (ID {nid}) | Block {hs_idx:3d}")
-                print(f"  [RAW  LoS] Rel Peak Smp: {rel_peak_raw:4d} | True Delay: {true_delay_raw:6.2f} smp | Rel TOA: {toa_sec_raw * 1e6:6.4f} us | Distance: {dist_raw:7.3f} m")
-                print(f"  [10x  LoS] Rel Peak Smp: {fine_rel_peak:6.2f} | True Delay: {true_delay_fine:6.2f} smp | Rel TOA: {toa_sec_fine * 1e6:6.4f} us | Distance: {dist_fine:7.3f} m")
-                print("-" * 95)
+                print(f"Antenna {ant_labels[ant_idx]} | Block {hs_idx:3d} | [RAW ] Rel Peak Sample: {float(raw_peak_offset):6.2f} | Rel TOA: {toa_sec_raw * 1e6:6.4f} us | Distance: {dist_raw:7.3f} m")
+                print(f"Antenna {ant_labels[ant_idx]} | Block {hs_idx:3d} | [FINE] Rel Peak Sample: {fine_peak_offset:6.2f} | Rel TOA: {toa_sec_fine * 1e6:6.4f} us | Distance: {dist_fine:7.3f} m")
+                print("-" * 85)
 
 # ==========================================
-# 7. VISUALIZATION
+# 7. VISUALIZATION (FULL MACROSCOPIC VIEW)
 # ==========================================
 t_ms_raw = np.arange(result_len) / FS * 1000 
 t_ms_os = np.arange(result_len_os) / FS_OS * 1000 
@@ -217,7 +182,7 @@ ax1.grid(True, alpha=0.3)
 
 for ant_idx in range(4):
     ax2.plot(t_ms_os, corr_os[ant_idx], color=colors[ant_idx], label=f'Antenna {ant_labels[ant_idx]} (10x OS)', linewidth=1.0)
-ax2.set_title("10x Zero-Padded Correlation Envelope with 70% Threshold LoS Detection", fontsize=14, fontweight='bold')
+ax2.set_title("10x Zero-Padded Correlation Envelope (1.2288 GHz Grid)", fontsize=14, fontweight='bold')
 ax2.set_xlabel("Relative Time in Search Window (ms)", fontsize=12)
 ax2.set_ylabel("Magnitude", fontsize=12)
 ax2.legend(loc='upper right')
