@@ -2,6 +2,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.fft import fft, ifft, ifftshift
 from scipy.signal import correlate, find_peaks
+import scipy.io as sio  # Used to export directly to MATLAB .mat files
+import csv              # Used to export universal .csv files
 
 # ==========================================
 # 1. 5G PRS WAVEFORM GENERATION FUNCTIONS
@@ -44,7 +46,7 @@ def get_local_ref_half_subframe(n_id, hs_idx, n_fft, cp_first, cp_normal, n_res,
             c_init_true = (part1 + part2 + part3) % (2**31)
             prs_seq = generate_prs_sequence(n_res // 2, c_init=c_init_true)
             
-            # 3GPP Rule: Long CP only for the very first symbol in 0.5ms block
+            # 3GPP Rule: Long CP is only applied to the very first symbol in a 0.5ms block
             if s_offset == 0 and l == 0:
                 current_cp = cp_first
             else:
@@ -59,39 +61,29 @@ def get_local_ref_half_subframe(n_id, hs_idx, n_fft, cp_first, cp_normal, n_res,
 # 2. FREQUENCY-DOMAIN OVER-SAMPLING & PEAK DETECTION
 # ==========================================
 def global_zero_padding(signal, factor=10):
-    """
-    Applies exact frequency-domain zero-padding to the ENTIRE signal array.
-    """
     N = len(signal)
     N_new = N * factor
-    
     X = fft(signal)
     X_padded = np.zeros(N_new, dtype=complex)
     half = N // 2
     X_padded[:half] = X[:half]
     X_padded[-half:] = X[-half:]
-    
     upsampled_signal = ifft(X_padded) * factor
     return upsampled_signal
 
 def extract_first_peak_in_window(window_data, threshold_ratio=0.7, min_dist=20):
-    """
-    Detects the FIRST peak exceeding threshold_ratio * max_val to isolate LoS.
-    Threshold is set to 70% (0.7) to ignore the ~53% structural ghost peak of PRS.
-    """
     if len(window_data) == 0:
         return 0
     max_val = np.max(window_data)
     if max_val == 0:
         return 0
     
-    # Search for peaks above 70% threshold
+    # Detect the first prominent peak (Line-of-Sight) exceeding the amplitude threshold
     peaks, _ = find_peaks(window_data, height=max_val * threshold_ratio, distance=min_dist)
-    
     if len(peaks) > 0:
-        return peaks[0]  # Return first peak exceeding threshold (True LoS)
+        return peaks[0]
     
-    return np.argmax(window_data)  # Fallback to global max if no peak found
+    return np.argmax(window_data)
 
 # ==========================================
 # 3. CONFIGURATION & CALIBRATION
@@ -100,129 +92,203 @@ FS = 122.88e6
 HALF_SUBFRAME_LEN = 61440 
 N_FFT, N_RES, N_CP_F, N_CP_N = 2048, 1620, 208, 144
 MU = 2
-K_OS = 10  # 10x Oversampling factor
-FS_OS = FS * K_OS  # 1.2288 GHz
+K_OS = 10
 SPEED_OF_LIGHT = 299792458.0 
+TX_PERIOD_HS = 20  # Modulo index for a 10ms frame length
 
-# RF hardware calibration offsets (base offset: 205, cable delay: +3 samples)
+nIDs = [100, 200, 300, 400]
+ant_labels = ['Antenna A (ch0)', 'Antenna B (ch1)', 'Antenna C (ch2)', 'Antenna D (ch3)']
+TARGET_BLOCK_COUNT = 10
+SEARCH_RANGE = 2000  # Broadened search window to safely isolate the LoS peak
+
 CALIBRATION_OFFSETS = {
-    100: 205.2,      # AP1 (Master)
-    200: 205.2 + 3,  # AP2 (with 5m RF cable compensation)
-    300: 205.2 + 3,  # AP3 (with 5m RF cable compensation)
-    400: 205.2       # AP4
+    100: 205.2,  
+    200: 208.1,  
+    300: 208.1,  
+    400: 205.2   
 }
+
+# Parameters for CIR visualization
+pre_samples_cir = 5    # Samples to extract before the main peak
+post_samples_cir = 70  # Samples to extract after the main peak (~170 meters for multipath echoes)
+cir_snapshot_db = {}   # Dictionary to store both distance axes and power profiles
 
 # ==========================================
 # 4. DATA LOADING
 # ==========================================
 skip_samples = int(FS * 1)
-search_samples = int(FS * 0.005) 
-
-print("Loading raw signal from /dev/shm/rx_wave_mu_2.bin...")
-rx_data = np.fromfile('/dev/shm/rx_wave_mu_2.bin', dtype=np.complex64, 
-                      offset=skip_samples * 8, count=search_samples)
+print("Loading raw signal from /home/antlab/Desktop/0,0_mu2_600m.bin...")
+rx_memmap = np.memmap('/home/antlab/Desktop/0,0_mu2_600m.bin', dtype=np.complex64, mode='r', offset=skip_samples * 8)
 
 # ==========================================
-# 5. CORRELATION & PROCESSING (BLOCK-BASED SEARCH)
+# 5. CYCLIC PROCESSING LOOP (A, B, C, D)
 # ==========================================
-result_len = search_samples - HALF_SUBFRAME_LEN + 1
-result_len_os = result_len * K_OS
+data_store = {nid: {'raw_dist': [], 'fine_dist': []} for nid in nIDs}
+counts = {nid: 0 for nid in nIDs}
 
-corr_raw = [np.zeros(result_len) for _ in range(4)]
-corr_os = [np.zeros(result_len_os) for _ in range(4)]
+print(f"\nProcessing first {TARGET_BLOCK_COUNT} Blocks for ALL Antennas (A, B, C, D)...\n")
 
-nIDs = [100, 200, 300, 400]
-ant_labels = ['A', 'B', 'C', 'D']
+abs_hs_idx = 0
+
+while any(c < TARGET_BLOCK_COUNT for c in counts.values()):
+    # Modulo 4 automatically routes the TDM slot to A(0), B(1), C(2), D(3)
+    ant_idx = abs_hs_idx % 4
+    nid = nIDs[ant_idx]
+    
+    # Skip if we already have enough measurements for this specific antenna ID
+    if counts[nid] >= TARGET_BLOCK_COUNT:
+        abs_hs_idx += 1
+        continue
+        
+    search_start_abs = abs_hs_idx * HALF_SUBFRAME_LEN
+    search_end_abs = search_start_abs + (2 * HALF_SUBFRAME_LEN) - 1
+    
+    if search_end_abs > len(rx_memmap):
+        print("\nWarning: Reached end of binary file early!")
+        break
+        
+    rx_chunk = rx_memmap[search_start_abs:search_end_abs]
+    hs_in_tx_period = abs_hs_idx % TX_PERIOD_HS
+    cal_offset = CALIBRATION_OFFSETS.get(nid, 0)
+    
+    ref_hs = get_local_ref_half_subframe(nid, hs_in_tx_period, N_FFT, N_CP_F, N_CP_N, N_RES, mu=MU)
+    
+    # --- 1. RAW 1x Grid ---
+    res_hs = correlate(rx_chunk, ref_hs, mode='valid')
+    res_abs = np.abs(res_hs)
+    window_data_raw = res_abs[:SEARCH_RANGE]
+    
+    rel_peak_raw = extract_first_peak_in_window(window_data_raw, threshold_ratio=0.7, min_dist=20)
+    toa_sec_raw = (rel_peak_raw - cal_offset) / FS
+    dist_raw = toa_sec_raw * SPEED_OF_LIGHT
+    
+    # MODIFIED: Extract the CIR slice and generate a specific absolute distance axis for this antenna
+    if nid not in cir_snapshot_db:
+        s_start = max(0, rel_peak_raw - pre_samples_cir)
+        s_end = min(len(res_abs), rel_peak_raw + post_samples_cir)
+        cir_slice = res_abs[s_start:s_end]
+        
+        # Calculate the absolute distance for every sample in the extracted slice
+        slice_indices = np.arange(s_start, s_end)
+        slice_distances = ((slice_indices - cal_offset) / FS) * SPEED_OF_LIGHT
+            
+        norm_peak = np.max(res_abs) + 1e-12
+        power_db = 20 * np.log10(cir_slice / norm_peak + 1e-10)
+        
+        # Store both the calculated distance axis and the power values
+        cir_snapshot_db[nid] = {
+            'distance': slice_distances,
+            'power_db': power_db
+        }
+
+    # --- 2. 10x Oversampled Grid ---
+    corr_os_complex = global_zero_padding(res_hs[:SEARCH_RANGE], factor=K_OS)
+    window_data_os = np.abs(corr_os_complex)
+    
+    rel_peak_os = extract_first_peak_in_window(window_data_os, threshold_ratio=0.7, min_dist=20 * K_OS)
+    fine_rel_peak = rel_peak_os / float(K_OS)
+    toa_sec_fine = (fine_rel_peak - cal_offset) / FS
+    dist_fine = toa_sec_fine * SPEED_OF_LIGHT
+    
+    # --- 3. Save to Memory ---
+    data_store[nid]['raw_dist'].append(dist_raw)
+    data_store[nid]['fine_dist'].append(dist_fine)
+    counts[nid] += 1
+    
+    # --- 4. Terminal Output ---
+    label = ant_labels[ant_idx]
+    print(f"[{counts[nid]:3d}/{TARGET_BLOCK_COUNT}] Antenna {label} (ID {nid}) | Block {abs_hs_idx:4d} (Slot Ref: {hs_in_tx_period:2d})")
+    print(f"  [RAW ] Smp: {rel_peak_raw:6.2f} | TOA: {toa_sec_raw * 1e6:6.4f} us | Dist: {dist_raw:7.3f} m")
+    print(f"  [FINE] Smp: {fine_rel_peak:6.2f} | TOA: {toa_sec_fine * 1e6:6.4f} us | Dist: {dist_fine:7.3f} m")
+    print("-" * 85)
+    
+    abs_hs_idx += 1
+
+# ==========================================
+# 6. DATA EXPORT FOR LOCALIZATION ALGORITHMS
+# ==========================================
+print("\n" + "="*85)
+print("SAVING MEASUREMENT DATA TO DISK...")
+print("="*85)
+
+# Ensure rows are aligned by limiting loops to the minimum valid count collected
+safe_count = min(counts.values())
+
+csv_filename = "localization_distances.csv"
+with open(csv_filename, 'w', newline='') as f:
+    writer = csv.writer(f)
+    writer.writerow(['Measurement_Index', 
+                     'Dist_A_Raw', 'Dist_B_Raw', 'Dist_C_Raw', 'Dist_D_Raw', 
+                     'Dist_A_Fine', 'Dist_B_Fine', 'Dist_C_Fine', 'Dist_D_Fine'])
+    
+    for i in range(safe_count):
+        writer.writerow([
+            i + 1,
+            data_store[100]['raw_dist'][i], data_store[200]['raw_dist'][i], 
+            data_store[300]['raw_dist'][i], data_store[400]['raw_dist'][i],
+            data_store[100]['fine_dist'][i], data_store[200]['fine_dist'][i], 
+            data_store[300]['fine_dist'][i], data_store[400]['fine_dist'][i]
+        ])
+print(f" -> Successfully saved CSV dataset: {csv_filename}")
+
+mat_filename = "localization_distances.mat"
+mat_data = {
+    'Dist_A_Raw': np.array(data_store[100]['raw_dist']),
+    'Dist_B_Raw': np.array(data_store[200]['raw_dist']),
+    'Dist_C_Raw': np.array(data_store[300]['raw_dist']),
+    'Dist_D_Raw': np.array(data_store[400]['raw_dist']),
+    'Dist_A_Fine': np.array(data_store[100]['fine_dist']),
+    'Dist_B_Fine': np.array(data_store[200]['fine_dist']),
+    'Dist_C_Fine': np.array(data_store[300]['fine_dist']),
+    'Dist_D_Fine': np.array(data_store[400]['fine_dist'])
+}
+sio.savemat(mat_filename, mat_data)
+print(f" -> Successfully saved MATLAB dataset: {mat_filename}")
+print("="*85 + "\n")
+
+# ==========================================
+# 7. 2D CIR MULTIPATH VISUALIZATION (ABSOLUTE DISTANCE)
+# ==========================================
+print("Rendering 2D CIR Multipath Plot for 4 Antennas (Absolute Distance)...")
+
+plt.figure(figsize=(12, 6))
 colors = ['blue', 'red', 'green', 'purple']
 
-total_hs = 8
-hs_assignments = [
-    np.arange(0, total_hs, 4), 
-    np.arange(1, total_hs, 4), 
-    np.arange(2, total_hs, 4), 
-    np.arange(3, total_hs, 4)  
-]
-
-print("Computing base correlation and applying global 10x zero-padding...")
-for ant_idx in range(4):
-    for hs_idx in hs_assignments[ant_idx]:
-        ref_hs = get_local_ref_half_subframe(nIDs[ant_idx], hs_idx, N_FFT, N_CP_F, N_CP_N, N_RES, mu=MU)
-        res_hs = correlate(rx_data, ref_hs, mode='valid')
-        corr_raw[ant_idx] += np.abs(res_hs)
-        
-    corr_os_complex = global_zero_padding(corr_raw[ant_idx], factor=K_OS)
-    corr_os[ant_idx] = np.abs(corr_os_complex)
-
-# ==========================================
-# 6. EXTRACT TOA AND DISTANCE (SIDE-BY-SIDE COMPARISON)
-# ==========================================
-print("\n" + "="*95)
-print("EXTRACTING TOA AND DISTANCE (BLOCK SEARCH + 70% THRESHOLD + 10X OS + CALIBRATION)")
-print("="*95)
+# Variables to dynamically adjust plot bounds based on actual distances
+min_plot_dist = np.inf
+max_plot_dist = -np.inf
 
 for ant_idx in range(4):
     nid = nIDs[ant_idx]
-    cal_offset = CALIBRATION_OFFSETS.get(nid, 0)
+    if nid in cir_snapshot_db:
+        # Retrieve the specific distance axis and power profile for this antenna
+        dist_axis = cir_snapshot_db[nid]['distance']
+        power_db = cir_snapshot_db[nid]['power_db']
+        
+        plt.plot(
+            dist_axis, 
+            power_db, 
+            label=f"{ant_labels[ant_idx]}", 
+            color=colors[ant_idx], 
+            linewidth=2.0, 
+            alpha=0.85
+        )
+        
+        # Update plotting boundaries
+        min_plot_dist = min(min_plot_dist, np.min(dist_axis))
+        max_plot_dist = max(max_plot_dist, np.max(dist_axis))
+
+plt.title("5G PRS UE Positioning Channel Impulse Response (Absolute Distance)", fontsize=14, fontweight='bold')
+plt.xlabel("Absolute Calibrated Distance (Meters)", fontsize=12)
+plt.ylabel("Relative Power (dB)", fontsize=12)
+
+# Dynamically set X-axis limits based on the computed physical distances
+if min_plot_dist != np.inf and max_plot_dist != -np.inf:
+    plt.xlim([min_plot_dist, max_plot_dist])
     
-    for hs_idx in hs_assignments[ant_idx]:
-        # Boundaries for Raw 1x Grid (0.5ms Block)
-        search_start = hs_idx * HALF_SUBFRAME_LEN
-        search_end = min(search_start + HALF_SUBFRAME_LEN, result_len)
-        
-        # Boundaries for Oversampled 10x Grid (0.5ms Block)
-        search_start_os = hs_idx * HALF_SUBFRAME_LEN * K_OS
-        search_end_os = min(search_start_os + HALF_SUBFRAME_LEN * K_OS, result_len_os)
-        
-        if search_start < result_len:
-            # --- 1. Peak Extraction on RAW 1x Grid ---
-            window_data_raw = corr_raw[ant_idx][search_start:search_end]
-            if len(window_data_raw) > 0:
-                rel_peak_raw = extract_first_peak_in_window(window_data_raw, threshold_ratio=0.6, min_dist=20)
-                true_delay_raw = rel_peak_raw - cal_offset
-                toa_sec_raw = true_delay_raw / FS
-                dist_raw = toa_sec_raw * SPEED_OF_LIGHT
-                
-            # --- 2. Peak Extraction on 10x OVERSAMPLED Grid ---
-            window_data_os = corr_os[ant_idx][search_start_os:search_end_os]
-            if len(window_data_os) > 0:
-                # min_dist is scaled by K_OS (20 * 10 = 200) to protect the interpolated main lobe
-                rel_peak_os = extract_first_peak_in_window(window_data_os, threshold_ratio=0.6, min_dist=20 * K_OS)
-                
-                fine_rel_peak = rel_peak_os / K_OS  # Convert 10x index back to float base index
-                true_delay_fine = fine_rel_peak - cal_offset
-                toa_sec_fine = true_delay_fine / FS
-                dist_fine = toa_sec_fine * SPEED_OF_LIGHT
-            
-            # --- 3. Output Comparison ---
-            if hs_idx < 16:
-                print(f"Antenna {ant_labels[ant_idx]} (ID {nid}) | Block {hs_idx:3d}")
-                print(f"  [RAW  LoS] Rel Peak Smp: {rel_peak_raw:4d} | True Delay: {true_delay_raw:6.2f} smp | Rel TOA: {toa_sec_raw * 1e6:6.4f} us | Distance: {dist_raw:7.3f} m")
-                print(f"  [10x  LoS] Rel Peak Smp: {fine_rel_peak:6.2f} | True Delay: {true_delay_fine:6.2f} smp | Rel TOA: {toa_sec_fine * 1e6:6.4f} us | Distance: {dist_fine:7.3f} m")
-                print("-" * 95)
+plt.ylim([-70, 2])
+plt.grid(True, linestyle='--', alpha=0.6)
+plt.legend(loc='upper right', fontsize=11, framealpha=0.9)
 
-# ==========================================
-# 7. VISUALIZATION
-# ==========================================
-t_ms_raw = np.arange(result_len) / FS * 1000 
-t_ms_os = np.arange(result_len_os) / FS_OS * 1000 
-
-fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(16, 10), sharex=True)
-
-for ant_idx in range(4):
-    ax1.plot(t_ms_raw, corr_raw[ant_idx], color=colors[ant_idx], label=f'Antenna {ant_labels[ant_idx]}', linewidth=1.0)
-ax1.set_title("Original Correlation Envelope (122.88 MHz Grid)", fontsize=14, fontweight='bold')
-ax1.set_ylabel("Magnitude", fontsize=12)
-ax1.legend(loc='upper right')
-ax1.grid(True, alpha=0.3)
-
-for ant_idx in range(4):
-    ax2.plot(t_ms_os, corr_os[ant_idx], color=colors[ant_idx], label=f'Antenna {ant_labels[ant_idx]} (10x OS)', linewidth=1.0)
-ax2.set_title("10x Zero-Padded Correlation Envelope with 70% Threshold LoS Detection", fontsize=14, fontweight='bold')
-ax2.set_xlabel("Relative Time in Search Window (ms)", fontsize=12)
-ax2.set_ylabel("Magnitude", fontsize=12)
-ax2.legend(loc='upper right')
-ax2.grid(True, alpha=0.3)
-
-plt.xlim(0, 4.5)
 plt.tight_layout()
 plt.show()
