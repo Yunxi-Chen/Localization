@@ -107,7 +107,7 @@ def run_spde_single_antenna(cfr_tensor, delta_f, M, expected_paths, tau_grid):
 # ==========================================
 # 3. CONFIGURATION & DATA LOADING
 # ==========================================
-FILE_PATH = r"D:\Users\f9657\OneDrive - TUM\hf_calibration.bin" 
+FILE_PATH = '/dev/shm/rx_wave_mu_2.bin' 
 FS = 122.88e6  
 DURATION = 10.0  
 DELTA_F = 60e3  # 60 kHz Subcarrier Spacing for mu=2
@@ -118,8 +118,8 @@ N_CP_F = 208
 N_CP_N = 144
 MU = 2
 
-TARGET_NID = 200
-TARGET_HS = 1  
+TARGET_NID = 100
+TARGET_HS = 0  
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Compute Device: {device}")
