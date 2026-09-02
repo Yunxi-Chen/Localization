@@ -162,8 +162,8 @@ cir_snapshot_db = {}
 # ==========================================
 skip_samples = int(FS * 1)
 
-FILE_AB = '/home/antlab/Desktop/12_2.9455, 7.817_7g.bin' 
-FILE_CD = '/home/antlab/Desktop/34_2.9455, 7.817_7G.bin'
+FILE_AB = '/home/antlab/Desktop/12_1.742, 10.807_15G.bin' 
+FILE_CD = '/home/antlab/Desktop/34_1.742, 10.807_15g.bin'
 
 print(f"Loading Signal A & B from: {FILE_AB}")
 rx_memmap_AB = np.memmap(FILE_AB, dtype=np.complex64, mode='r', offset=skip_samples * 8)
@@ -282,7 +282,15 @@ while any(c < TARGET_BLOCK_COUNT for c in counts.values()):
     toa_sec_spde = frame_toa - (cal_offset / float(FS))
     dist_spde = toa_sec_spde * SPEED_OF_LIGHT
 
-    # --- Save to Memory ---
+    # ---------------------------------------------------------
+    # STRICT PHYSICAL VALIDATION & OUTLIER REJECTION
+    # ---------------------------------------------------------
+    # Discard invalid snapshots (e.g., negative distances or jumps outside the room boundaries > 15m)
+    if dist_spde <= 0 or dist_spde > 15.0:
+        abs_hs_idx += 1  # Roll forward without incrementing valid count
+        continue
+
+    # Store valid measurement data
     data_store[nid]['raw_dist'].append(dist_raw)
     data_store[nid]['fine_dist'].append(dist_fine)
     data_store[nid]['spde_dist'].append(dist_spde)
