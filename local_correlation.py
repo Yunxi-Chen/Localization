@@ -1,12 +1,16 @@
+import os
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+
 import numpy as np
 import matplotlib.pyplot as plt
+import torch
 from scipy.fft import fft, ifft, ifftshift
 from scipy.signal import correlate, find_peaks
 import scipy.io as sio  # Used to export directly to MATLAB .mat files
 import csv              # Used to export universal .csv files
 
 # ==========================================
-# 1. 5G PRS WAVEFORM GENERATION FUNCTIONS
+# 1. 3GPP 5G PRS WAVEFORM GENERATION FUNCTIONS
 # ==========================================
 def generate_prs_sequence(n_res, c_init):
     n_bits = 2 * n_res
@@ -58,7 +62,7 @@ def get_local_ref_half_subframe(n_id, hs_idx, n_fft, cp_first, cp_normal, n_res,
     return hs_waveform
 
 # ==========================================
-# 2. FREQUENCY-DOMAIN OVER-SAMPLING & PEAK DETECTION
+# 2. SIGNAL PROCESSING FUNCTIONS (FINE & SPDE)
 # ==========================================
 def global_zero_padding(signal, factor=10):
     N = len(signal)
@@ -72,17 +76,49 @@ def global_zero_padding(signal, factor=10):
     return upsampled_signal
 
 def extract_first_peak_in_window(window_data, threshold_ratio=0.7, min_dist=20):
-    if len(window_data) == 0:
-        return 0
+    if len(window_data) == 0: return 0
     max_val = np.max(window_data)
-    if max_val == 0:
-        return 0
-    
-    # Detect the first prominent peak (Line-of-Sight) exceeding the amplitude threshold
+    if max_val == 0: return 0
     peaks, _ = find_peaks(window_data, height=max_val * threshold_ratio, distance=min_dist)
-    if len(peaks) > 0:
-        return peaks[0]
+    if len(peaks) > 0: return peaks[0]
     return np.argmax(window_data)
+
+def run_spde_single_antenna(cfr_tensor, delta_f, M, expected_paths, tau_grid):
+    K = cfr_tensor.shape[0]
+    device = cfr_tensor.device
+    
+    # Forward Spatial Smoothing (Toeplitz Construction)
+    Z = torch.zeros((M, K - M + 1), dtype=torch.complex64, device=device)
+    for i in range(K - M + 1):
+        Z[:, i] = cfr_tensor[i : i + M]
+    R_z = (Z @ Z.mH) / (K - M + 1) 
+    
+    # Eigendecomposition & Noise Subspace Extraction
+    eigenvalues, eigenvectors = torch.linalg.eigh(R_z)
+    
+    idx = torch.argsort(eigenvalues, descending=True)
+    eigenvectors = eigenvectors[:, idx]
+    E_n = eigenvectors[:, expected_paths:] 
+    
+    # Vectorized Pseudospectrum Projection
+    k_indices = torch.arange(M, device=device).unsqueeze(1) 
+    steering_matrix = torch.exp(-1j * 2 * torch.pi * delta_f * k_indices * tau_grid)
+    projection = E_n.mH @ steering_matrix
+    pseudospectrum = 1.0 / torch.sum(torch.abs(projection)**2, dim=0)
+    
+    # Extract the pseudospectrum to CPU for peak analysis
+    pseudo_np = pseudospectrum.cpu().numpy()
+    
+    # Find all peaks that are at least 10% of the maximum peak's height
+    peak_indices, _ = find_peaks(pseudo_np, height=np.max(pseudo_np) * 0.1)
+    if len(peak_indices) > 0:
+        first_peak_idx = peak_indices[0] # FAP Logic: Earliest arrival
+        delta_tau = tau_grid[first_peak_idx].item()
+    else:
+        peak_idx = torch.argmax(pseudospectrum)
+        delta_tau = tau_grid[peak_idx].item()
+        
+    return delta_tau, pseudo_np
 
 # ==========================================
 # 3. CONFIGURATION & CALIBRATION
@@ -100,7 +136,15 @@ ant_labels = ['Antenna A (ch0)', 'Antenna B (ch1)', 'Antenna C (ch2)', 'Antenna 
 TARGET_BLOCK_COUNT = 200  # Number of valid snapshots to extract
 SEARCH_RANGE = 2000 
 
-# UPDATED: Using SPDE High-Precision Offsets
+# SPDE Config
+DELTA_F = 60e3
+DELTA_F_ACTIVE = DELTA_F * 2 # 120 kHz for comb-2 structure
+ADVANCE_MARGIN = N_CP_F // 4 # Advance the FFT window by 1/4 CP length
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(f"Compute Device for SPDE: {device}")
+tau_grid = torch.linspace(0e-9, 700e-9, 20000, device=device) # Pre-allocate grid on GPU
+
+# Hardware Calibration Offsets (Based on SPDE measurements)
 CALIBRATION_OFFSETS = {
     100: 207.313,  # No extension cable
     200: 210.165,  # With extension cable
@@ -108,7 +152,7 @@ CALIBRATION_OFFSETS = {
     400: 207.313   # No extension cable
 }
 
-# Parameters for CIR visualization
+# --- RESTORED: Parameters for CIR visualization ---
 pre_samples_cir = 5    
 post_samples_cir = 35  
 cir_snapshot_db = {}   
@@ -130,7 +174,7 @@ rx_memmap_CD = np.memmap(FILE_CD, dtype=np.complex64, mode='r', offset=skip_samp
 # ==========================================
 # 5. CYCLIC PROCESSING LOOP (A, B, C, D)
 # ==========================================
-data_store = {nid: {'raw_dist': [], 'fine_dist': []} for nid in nIDs}
+data_store = {nid: {'raw_dist': [], 'fine_dist': [], 'spde_dist': []} for nid in nIDs}
 counts = {nid: 0 for nid in nIDs}
 
 print(f"\nProcessing {TARGET_BLOCK_COUNT} Blocks for ALL Antennas (A, B, C, D)...\n")
@@ -141,7 +185,6 @@ while any(c < TARGET_BLOCK_COUNT for c in counts.values()):
     ant_idx = abs_hs_idx % 4
     nid = nIDs[ant_idx]
     
-    # Skip if we already have enough measurements for this specific antenna ID
     if counts[nid] >= TARGET_BLOCK_COUNT:
         abs_hs_idx += 1
         continue
@@ -150,17 +193,15 @@ while any(c < TARGET_BLOCK_COUNT for c in counts.values()):
     search_end_abs = search_start_abs + (2 * HALF_SUBFRAME_LEN) - 1
     
     # --- DYNAMIC FILE ROUTING ---
-    if nid in [100, 200]:  # Route Antennas A and B to FILE_AB
+    if nid in [100, 200]: 
         if search_end_abs > len(rx_memmap_AB):
-            print(f"\nWarning: Reached end of FILE_AB early for Antenna {nid}!")
-            counts[nid] = TARGET_BLOCK_COUNT  # Force loop completion for this antenna
+            counts[nid] = TARGET_BLOCK_COUNT 
             abs_hs_idx += 1
             continue
         rx_chunk = rx_memmap_AB[search_start_abs:search_end_abs]
-    else:                  # Route Antennas C and D to FILE_CD
+    else:                 
         if search_end_abs > len(rx_memmap_CD):
-            print(f"\nWarning: Reached end of FILE_CD early for Antenna {nid}!")
-            counts[nid] = TARGET_BLOCK_COUNT  # Force loop completion for this antenna
+            counts[nid] = TARGET_BLOCK_COUNT 
             abs_hs_idx += 1
             continue
         rx_chunk = rx_memmap_CD[search_start_abs:search_end_abs]
@@ -170,7 +211,9 @@ while any(c < TARGET_BLOCK_COUNT for c in counts.values()):
     
     ref_hs = get_local_ref_half_subframe(nid, hs_in_tx_period, N_FFT, N_CP_F, N_CP_N, N_RES, mu=MU)
     
-    # --- 1. RAW 1x Grid ---
+    # ---------------------------------------------------------
+    # METHOD 1: RAW 1x Grid 
+    # ---------------------------------------------------------
     res_hs = correlate(rx_chunk, ref_hs, mode='valid')
     res_abs = np.abs(res_hs)
     window_data_raw = res_abs[:SEARCH_RANGE]
@@ -179,7 +222,7 @@ while any(c < TARGET_BLOCK_COUNT for c in counts.values()):
     toa_sec_raw = (rel_peak_raw - cal_offset) / FS
     dist_raw = toa_sec_raw * SPEED_OF_LIGHT
     
-    # Extract the CIR slice for visualization
+    # --- RESTORED: Extract the CIR slice for visualization ---
     if nid not in cir_snapshot_db:
         s_start = max(0, rel_peak_raw - pre_samples_cir)
         s_end = min(len(res_abs), rel_peak_raw + post_samples_cir)
@@ -196,7 +239,9 @@ while any(c < TARGET_BLOCK_COUNT for c in counts.values()):
             'power_db': power_db
         }
 
-    # --- 2. 10x Oversampled Grid ---
+    # ---------------------------------------------------------
+    # METHOD 2: 10x Oversampled Grid 
+    # ---------------------------------------------------------
     corr_os_complex = global_zero_padding(res_hs[:SEARCH_RANGE], factor=K_OS)
     window_data_os = np.abs(corr_os_complex)
     
@@ -205,20 +250,54 @@ while any(c < TARGET_BLOCK_COUNT for c in counts.values()):
     toa_sec_fine = (fine_rel_peak - cal_offset) / FS
     dist_fine = toa_sec_fine * SPEED_OF_LIGHT
     
-    # --- 3. Save to Memory ---
+    # ---------------------------------------------------------
+    # METHOD 3: SPDE (Subspace Super-Resolution)
+    # ---------------------------------------------------------
+    start_fft_rel = int(rel_peak_raw) + N_CP_F - ADVANCE_MARGIN
+    rx_symbol = rx_chunk[start_fft_rel : start_fft_rel + N_FFT]
+    
+    rx_fft_shifted = np.fft.fftshift(np.fft.fft(rx_symbol))
+    start_sub = (N_FFT - N_RES) // 2
+    rx_active_subcarriers = rx_fft_shifted[start_sub : start_sub + N_RES : 2]
+    
+    slots_per_hs = 2 ** (MU - 1) 
+    start_slot = hs_in_tx_period * slots_per_hs
+    part1 = (2**22) * (nid // 1024)
+    part2 = (2**10) * (14 * start_slot + 0 + 1) * (2 * (nid % 1024) + 1)
+    part3 = (nid % 1024)
+    c_init_true = (part1 + part2 + part3) % (2**31)
+    tx_freq_seq = generate_prs_sequence(N_RES // 2, c_init=c_init_true)
+    
+    cfr_numpy = rx_active_subcarriers / tx_freq_seq
+    dc_idx = len(cfr_numpy) // 2 
+    cfr_numpy[dc_idx] = (cfr_numpy[dc_idx - 1] + cfr_numpy[dc_idx + 1]) / 2.0
+    
+    cfr_tensor = torch.tensor(cfr_numpy, dtype=torch.complex64, device=device)
+    M = len(cfr_tensor) // 2
+    delta_tau, _ = run_spde_single_antenna(cfr_tensor, delta_f=DELTA_F_ACTIVE, M=M, expected_paths=3, tau_grid=tau_grid)
+    
+    t_window_start_sec = start_fft_rel / float(FS)
+    symbol_toa = t_window_start_sec + delta_tau
+    frame_toa = symbol_toa - (N_CP_F / float(FS))
+    toa_sec_spde = frame_toa - (cal_offset / float(FS))
+    dist_spde = toa_sec_spde * SPEED_OF_LIGHT
+
+    # --- Save to Memory ---
     data_store[nid]['raw_dist'].append(dist_raw)
     data_store[nid]['fine_dist'].append(dist_fine)
+    data_store[nid]['spde_dist'].append(dist_spde)
     counts[nid] += 1
     
-    # --- 4. Terminal Output (Throttled to avoid flooding) ---
+    # --- Terminal Output ---
     if counts[nid] <= 5: 
         label = ant_labels[ant_idx]
-        print(f"[{counts[nid]:3d}/{TARGET_BLOCK_COUNT}] Antenna {label} (ID {nid})")
-        print(f"  [RAW ] Smp: {rel_peak_raw:6.2f} | TOA: {toa_sec_raw * 1e6:6.4f} us | Dist: {dist_raw:7.3f} m")
-        print(f"  [FINE] Smp: {fine_rel_peak:6.2f} | TOA: {toa_sec_fine * 1e6:6.4f} us | Dist: {dist_fine:7.3f} m")
+        print(f"[{counts[nid]:3d}/{TARGET_BLOCK_COUNT}] {label} (ID {nid})")
+        print(f"  [RAW ] Dist: {dist_raw:7.4f} m | TOA: {toa_sec_raw * 1e6:6.4f} us")
+        print(f"  [FINE] Dist: {dist_fine:7.4f} m | TOA: {toa_sec_fine * 1e6:6.4f} us")
+        print(f"  [SPDE] Dist: {dist_spde:7.4f} m | TOA: {toa_sec_spde * 1e6:6.4f} us")
         print("-" * 85)
     elif counts[nid] == 6:
-        print(f"... Silently processing remaining blocks for Antenna {ant_labels[ant_idx]} ...")
+        print(f"... Silently processing remaining blocks for {ant_labels[ant_idx]} ...")
         
     abs_hs_idx += 1
 
@@ -229,16 +308,17 @@ print("\n" + "="*85)
 print("SAVING MEASUREMENT DATA TO DISK...")
 print("="*85)
 
-# Ensure rows are aligned by limiting loops to the minimum valid count collected.
-# This ensures that if one file is shorter, the exported matrix remains a perfect rectangle.
 safe_count = min(counts.values())
 
 csv_filename = "localization_distances.csv"
 with open(csv_filename, 'w', newline='') as f:
     writer = csv.writer(f)
-    writer.writerow(['Measurement_Index', 
-                     'Dist_A_Raw', 'Dist_B_Raw', 'Dist_C_Raw', 'Dist_D_Raw', 
-                     'Dist_A_Fine', 'Dist_B_Fine', 'Dist_C_Fine', 'Dist_D_Fine'])
+    writer.writerow([
+        'Measurement_Index', 
+        'Dist_A_Raw', 'Dist_B_Raw', 'Dist_C_Raw', 'Dist_D_Raw', 
+        'Dist_A_Fine', 'Dist_B_Fine', 'Dist_C_Fine', 'Dist_D_Fine',
+        'Dist_A_SPDE', 'Dist_B_SPDE', 'Dist_C_SPDE', 'Dist_D_SPDE'
+    ])
     
     for i in range(safe_count):
         writer.writerow([
@@ -246,7 +326,9 @@ with open(csv_filename, 'w', newline='') as f:
             data_store[100]['raw_dist'][i], data_store[200]['raw_dist'][i], 
             data_store[300]['raw_dist'][i], data_store[400]['raw_dist'][i],
             data_store[100]['fine_dist'][i], data_store[200]['fine_dist'][i], 
-            data_store[300]['fine_dist'][i], data_store[400]['fine_dist'][i]
+            data_store[300]['fine_dist'][i], data_store[400]['fine_dist'][i],
+            data_store[100]['spde_dist'][i], data_store[200]['spde_dist'][i], 
+            data_store[300]['spde_dist'][i], data_store[400]['spde_dist'][i]
         ])
 print(f" -> Successfully saved CSV dataset: {csv_filename} ({safe_count} snapshots)")
 
@@ -256,17 +338,23 @@ mat_data = {
     'Dist_B_Raw': np.array(data_store[200]['raw_dist'][:safe_count]),
     'Dist_C_Raw': np.array(data_store[300]['raw_dist'][:safe_count]),
     'Dist_D_Raw': np.array(data_store[400]['raw_dist'][:safe_count]),
+    
     'Dist_A_Fine': np.array(data_store[100]['fine_dist'][:safe_count]),
     'Dist_B_Fine': np.array(data_store[200]['fine_dist'][:safe_count]),
     'Dist_C_Fine': np.array(data_store[300]['fine_dist'][:safe_count]),
-    'Dist_D_Fine': np.array(data_store[400]['fine_dist'][:safe_count])
+    'Dist_D_Fine': np.array(data_store[400]['fine_dist'][:safe_count]),
+    
+    'Dist_A_SPDE': np.array(data_store[100]['spde_dist'][:safe_count]),
+    'Dist_B_SPDE': np.array(data_store[200]['spde_dist'][:safe_count]),
+    'Dist_C_SPDE': np.array(data_store[300]['spde_dist'][:safe_count]),
+    'Dist_D_SPDE': np.array(data_store[400]['spde_dist'][:safe_count])
 }
 sio.savemat(mat_filename, mat_data)
 print(f" -> Successfully saved MATLAB dataset: {mat_filename} ({safe_count} snapshots)")
 print("="*85 + "\n")
 
 # ==========================================
-# 7. 2D CIR MULTIPATH VISUALIZATION
+# 7. RESTORED: 2D CIR MULTIPATH VISUALIZATION
 # ==========================================
 print("Rendering 2D CIR Multipath Plot for 4 Antennas (Absolute Distance)...")
 
