@@ -82,7 +82,6 @@ def extract_first_peak_in_window(window_data, threshold_ratio=0.7, min_dist=20):
     peaks, _ = find_peaks(window_data, height=max_val * threshold_ratio, distance=min_dist)
     if len(peaks) > 0:
         return peaks[0]
-    
     return np.argmax(window_data)
 
 # ==========================================
@@ -98,27 +97,35 @@ TX_PERIOD_HS = 20  # Modulo index for a 10ms frame length
 
 nIDs = [100, 200, 300, 400]
 ant_labels = ['Antenna A (ch0)', 'Antenna B (ch1)', 'Antenna C (ch2)', 'Antenna D (ch3)']
-TARGET_BLOCK_COUNT = 10
-SEARCH_RANGE = 2000  # Broadened search window to safely isolate the LoS peak
+TARGET_BLOCK_COUNT = 200  # Number of valid snapshots to extract
+SEARCH_RANGE = 2000 
 
+# UPDATED: Using SPDE High-Precision Offsets
 CALIBRATION_OFFSETS = {
-    100: 205.2,  
-    200: 208.1,  
-    300: 208.1,  
-    400: 205.2   
+    100: 207.313,  # No extension cable
+    200: 210.165,  # With extension cable
+    300: 210.165,  # With extension cable
+    400: 207.313   # No extension cable
 }
 
 # Parameters for CIR visualization
-pre_samples_cir = 5    # Samples to extract before the main peak
-post_samples_cir = 70  # Samples to extract after the main peak (~170 meters for multipath echoes)
-cir_snapshot_db = {}   # Dictionary to store both distance axes and power profiles
+pre_samples_cir = 5    
+post_samples_cir = 35  
+cir_snapshot_db = {}   
 
 # ==========================================
-# 4. DATA LOADING
+# 4. DATA LOADING (TWO-FILE SYSTEM)
 # ==========================================
 skip_samples = int(FS * 1)
-print("Loading raw signal from /home/antlab/Desktop/0,0_mu2_600m.bin...")
-rx_memmap = np.memmap('/home/antlab/Desktop/0,0_mu2_600m.bin', dtype=np.complex64, mode='r', offset=skip_samples * 8)
+
+FILE_AB = '/home/antlab/Desktop/12_2.9455, 7.817_7g.bin' 
+FILE_CD = '/home/antlab/Desktop/34_2.9455, 7.817_7G.bin'
+
+print(f"Loading Signal A & B from: {FILE_AB}")
+rx_memmap_AB = np.memmap(FILE_AB, dtype=np.complex64, mode='r', offset=skip_samples * 8)
+
+print(f"Loading Signal C & D from: {FILE_CD}")
+rx_memmap_CD = np.memmap(FILE_CD, dtype=np.complex64, mode='r', offset=skip_samples * 8)
 
 # ==========================================
 # 5. CYCLIC PROCESSING LOOP (A, B, C, D)
@@ -126,12 +133,11 @@ rx_memmap = np.memmap('/home/antlab/Desktop/0,0_mu2_600m.bin', dtype=np.complex6
 data_store = {nid: {'raw_dist': [], 'fine_dist': []} for nid in nIDs}
 counts = {nid: 0 for nid in nIDs}
 
-print(f"\nProcessing first {TARGET_BLOCK_COUNT} Blocks for ALL Antennas (A, B, C, D)...\n")
+print(f"\nProcessing {TARGET_BLOCK_COUNT} Blocks for ALL Antennas (A, B, C, D)...\n")
 
 abs_hs_idx = 0
 
 while any(c < TARGET_BLOCK_COUNT for c in counts.values()):
-    # Modulo 4 automatically routes the TDM slot to A(0), B(1), C(2), D(3)
     ant_idx = abs_hs_idx % 4
     nid = nIDs[ant_idx]
     
@@ -143,11 +149,22 @@ while any(c < TARGET_BLOCK_COUNT for c in counts.values()):
     search_start_abs = abs_hs_idx * HALF_SUBFRAME_LEN
     search_end_abs = search_start_abs + (2 * HALF_SUBFRAME_LEN) - 1
     
-    if search_end_abs > len(rx_memmap):
-        print("\nWarning: Reached end of binary file early!")
-        break
+    # --- DYNAMIC FILE ROUTING ---
+    if nid in [100, 200]:  # Route Antennas A and B to FILE_AB
+        if search_end_abs > len(rx_memmap_AB):
+            print(f"\nWarning: Reached end of FILE_AB early for Antenna {nid}!")
+            counts[nid] = TARGET_BLOCK_COUNT  # Force loop completion for this antenna
+            abs_hs_idx += 1
+            continue
+        rx_chunk = rx_memmap_AB[search_start_abs:search_end_abs]
+    else:                  # Route Antennas C and D to FILE_CD
+        if search_end_abs > len(rx_memmap_CD):
+            print(f"\nWarning: Reached end of FILE_CD early for Antenna {nid}!")
+            counts[nid] = TARGET_BLOCK_COUNT  # Force loop completion for this antenna
+            abs_hs_idx += 1
+            continue
+        rx_chunk = rx_memmap_CD[search_start_abs:search_end_abs]
         
-    rx_chunk = rx_memmap[search_start_abs:search_end_abs]
     hs_in_tx_period = abs_hs_idx % TX_PERIOD_HS
     cal_offset = CALIBRATION_OFFSETS.get(nid, 0)
     
@@ -162,20 +179,18 @@ while any(c < TARGET_BLOCK_COUNT for c in counts.values()):
     toa_sec_raw = (rel_peak_raw - cal_offset) / FS
     dist_raw = toa_sec_raw * SPEED_OF_LIGHT
     
-    # MODIFIED: Extract the CIR slice and generate a specific absolute distance axis for this antenna
+    # Extract the CIR slice for visualization
     if nid not in cir_snapshot_db:
         s_start = max(0, rel_peak_raw - pre_samples_cir)
         s_end = min(len(res_abs), rel_peak_raw + post_samples_cir)
         cir_slice = res_abs[s_start:s_end]
         
-        # Calculate the absolute distance for every sample in the extracted slice
         slice_indices = np.arange(s_start, s_end)
         slice_distances = ((slice_indices - cal_offset) / FS) * SPEED_OF_LIGHT
             
         norm_peak = np.max(res_abs) + 1e-12
         power_db = 20 * np.log10(cir_slice / norm_peak + 1e-10)
         
-        # Store both the calculated distance axis and the power values
         cir_snapshot_db[nid] = {
             'distance': slice_distances,
             'power_db': power_db
@@ -195,13 +210,16 @@ while any(c < TARGET_BLOCK_COUNT for c in counts.values()):
     data_store[nid]['fine_dist'].append(dist_fine)
     counts[nid] += 1
     
-    # --- 4. Terminal Output ---
-    label = ant_labels[ant_idx]
-    print(f"[{counts[nid]:3d}/{TARGET_BLOCK_COUNT}] Antenna {label} (ID {nid}) | Block {abs_hs_idx:4d} (Slot Ref: {hs_in_tx_period:2d})")
-    print(f"  [RAW ] Smp: {rel_peak_raw:6.2f} | TOA: {toa_sec_raw * 1e6:6.4f} us | Dist: {dist_raw:7.3f} m")
-    print(f"  [FINE] Smp: {fine_rel_peak:6.2f} | TOA: {toa_sec_fine * 1e6:6.4f} us | Dist: {dist_fine:7.3f} m")
-    print("-" * 85)
-    
+    # --- 4. Terminal Output (Throttled to avoid flooding) ---
+    if counts[nid] <= 5: 
+        label = ant_labels[ant_idx]
+        print(f"[{counts[nid]:3d}/{TARGET_BLOCK_COUNT}] Antenna {label} (ID {nid})")
+        print(f"  [RAW ] Smp: {rel_peak_raw:6.2f} | TOA: {toa_sec_raw * 1e6:6.4f} us | Dist: {dist_raw:7.3f} m")
+        print(f"  [FINE] Smp: {fine_rel_peak:6.2f} | TOA: {toa_sec_fine * 1e6:6.4f} us | Dist: {dist_fine:7.3f} m")
+        print("-" * 85)
+    elif counts[nid] == 6:
+        print(f"... Silently processing remaining blocks for Antenna {ant_labels[ant_idx]} ...")
+        
     abs_hs_idx += 1
 
 # ==========================================
@@ -211,7 +229,8 @@ print("\n" + "="*85)
 print("SAVING MEASUREMENT DATA TO DISK...")
 print("="*85)
 
-# Ensure rows are aligned by limiting loops to the minimum valid count collected
+# Ensure rows are aligned by limiting loops to the minimum valid count collected.
+# This ensures that if one file is shorter, the exported matrix remains a perfect rectangle.
 safe_count = min(counts.values())
 
 csv_filename = "localization_distances.csv"
@@ -229,39 +248,37 @@ with open(csv_filename, 'w', newline='') as f:
             data_store[100]['fine_dist'][i], data_store[200]['fine_dist'][i], 
             data_store[300]['fine_dist'][i], data_store[400]['fine_dist'][i]
         ])
-print(f" -> Successfully saved CSV dataset: {csv_filename}")
+print(f" -> Successfully saved CSV dataset: {csv_filename} ({safe_count} snapshots)")
 
 mat_filename = "localization_distances.mat"
 mat_data = {
-    'Dist_A_Raw': np.array(data_store[100]['raw_dist']),
-    'Dist_B_Raw': np.array(data_store[200]['raw_dist']),
-    'Dist_C_Raw': np.array(data_store[300]['raw_dist']),
-    'Dist_D_Raw': np.array(data_store[400]['raw_dist']),
-    'Dist_A_Fine': np.array(data_store[100]['fine_dist']),
-    'Dist_B_Fine': np.array(data_store[200]['fine_dist']),
-    'Dist_C_Fine': np.array(data_store[300]['fine_dist']),
-    'Dist_D_Fine': np.array(data_store[400]['fine_dist'])
+    'Dist_A_Raw': np.array(data_store[100]['raw_dist'][:safe_count]),
+    'Dist_B_Raw': np.array(data_store[200]['raw_dist'][:safe_count]),
+    'Dist_C_Raw': np.array(data_store[300]['raw_dist'][:safe_count]),
+    'Dist_D_Raw': np.array(data_store[400]['raw_dist'][:safe_count]),
+    'Dist_A_Fine': np.array(data_store[100]['fine_dist'][:safe_count]),
+    'Dist_B_Fine': np.array(data_store[200]['fine_dist'][:safe_count]),
+    'Dist_C_Fine': np.array(data_store[300]['fine_dist'][:safe_count]),
+    'Dist_D_Fine': np.array(data_store[400]['fine_dist'][:safe_count])
 }
 sio.savemat(mat_filename, mat_data)
-print(f" -> Successfully saved MATLAB dataset: {mat_filename}")
+print(f" -> Successfully saved MATLAB dataset: {mat_filename} ({safe_count} snapshots)")
 print("="*85 + "\n")
 
 # ==========================================
-# 7. 2D CIR MULTIPATH VISUALIZATION (ABSOLUTE DISTANCE)
+# 7. 2D CIR MULTIPATH VISUALIZATION
 # ==========================================
 print("Rendering 2D CIR Multipath Plot for 4 Antennas (Absolute Distance)...")
 
 plt.figure(figsize=(12, 6))
 colors = ['blue', 'red', 'green', 'purple']
 
-# Variables to dynamically adjust plot bounds based on actual distances
 min_plot_dist = np.inf
 max_plot_dist = -np.inf
 
 for ant_idx in range(4):
     nid = nIDs[ant_idx]
     if nid in cir_snapshot_db:
-        # Retrieve the specific distance axis and power profile for this antenna
         dist_axis = cir_snapshot_db[nid]['distance']
         power_db = cir_snapshot_db[nid]['power_db']
         
@@ -274,7 +291,6 @@ for ant_idx in range(4):
             alpha=0.85
         )
         
-        # Update plotting boundaries
         min_plot_dist = min(min_plot_dist, np.min(dist_axis))
         max_plot_dist = max(max_plot_dist, np.max(dist_axis))
 
@@ -282,7 +298,6 @@ plt.title("5G PRS UE Positioning Channel Impulse Response (Absolute Distance)", 
 plt.xlabel("Absolute Calibrated Distance (Meters)", fontsize=12)
 plt.ylabel("Relative Power (dB)", fontsize=12)
 
-# Dynamically set X-axis limits based on the computed physical distances
 if min_plot_dist != np.inf and max_plot_dist != -np.inf:
     plt.xlim([min_plot_dist, max_plot_dist])
     

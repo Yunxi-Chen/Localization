@@ -132,15 +132,20 @@ print("\n" + "="*85)
 print("EXTRACTING TOA AND DISTANCE (RAW vs. 10X OVERSAMPLED COMPARISON)")
 print("="*85)
 
+# --- ENGINEERING UPDATE: Tighter Search Window ---
+# Hardware baseline ~210 samples + 11m physical LoS (~4.5 samples) + 35 samples buffer
+MAX_SEARCH_SAMPLES = 250
+MAX_SEARCH_SAMPLES_OS = MAX_SEARCH_SAMPLES * K_OS
+
 for ant_idx in range(4):
     for hs_idx in hs_assignments[ant_idx]:
-        # Boundaries for Raw 1x Grid
+        # Boundaries for Raw 1x Grid (Restricted to MAX_SEARCH_SAMPLES)
         search_start = hs_idx * HALF_SUBFRAME_LEN
-        search_end = min(search_start + HALF_SUBFRAME_LEN, result_len)
+        search_end = min(search_start + MAX_SEARCH_SAMPLES, result_len)
         
-        # Boundaries for Oversampled 10x Grid
+        # Boundaries for Oversampled 10x Grid (Restricted accordingly)
         search_start_os = hs_idx * HALF_SUBFRAME_LEN * K_OS
-        search_end_os = min(search_start_os + HALF_SUBFRAME_LEN * K_OS, result_len_os)
+        search_end_os = min(search_start_os + MAX_SEARCH_SAMPLES_OS, result_len_os)
         
         if search_start < result_len:
             # --- 1. Peak Extraction on RAW Grid ---
@@ -154,7 +159,7 @@ for ant_idx in range(4):
             window_data_os = corr_os[ant_idx][search_start_os:search_end_os]
             if len(window_data_os) > 0:
                 os_peak_offset = np.argmax(window_data_os)
-                # Convert the 10x grid index back to the base 122.88MHz float format (e.g., 208.70)
+                # Convert the 10x grid index back to the base 122.88MHz float format
                 fine_peak_offset = os_peak_offset / K_OS  
                 toa_sec_fine = fine_peak_offset / FS
                 dist_fine = toa_sec_fine * SPEED_OF_LIGHT

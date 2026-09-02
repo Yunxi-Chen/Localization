@@ -119,7 +119,8 @@ N_CP_N = 144
 MU = 2
 
 TARGET_NID = 100
-TARGET_HS = 0  
+TARGET_HS = 0
+  
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Compute Device: {device}")
@@ -215,16 +216,22 @@ delta_tau, pseudospectrum = run_spde_single_antenna(
     cfr_tensor, delta_f=DELTA_F_ACTIVE, M=M, expected_paths=3, tau_grid=tau_grid
 )
 
-# Calculate Final Absolute TOA
+# ==========================================
+# ORIGINAL LOGIC: Calculates the absolute start of the Useful Symbol
 t_window_start = start_fft / FS
-final_toa = t_window_start + delta_tau
+symbol_toa = t_window_start + delta_tau
+
+# ==========================================
+# CORRECTED LOGIC: Roll back by 1 CP length to align with the physical start of the frame (Frame TOA)
+final_toa = symbol_toa - (N_CP_F / FS)
 
 print(f"\n--- LOCALIZATION RESULTS ---")
 print(f"Coarse Peak Index:     {coarse_peak_idx}")
 print(f"FFT Window Start Idx:  {start_fft} (Margin: -{ADVANCE_MARGIN})")
 print(f"Base T_window_start:   {t_window_start * 1e6:.6f} us")
 print(f"SPDE Sub-sample Delta: {delta_tau * 1e9:.4f} ns")
-print(f"Final Absolute TOA:    {final_toa * 1e6:.6f} us")
+print(f"Symbol Absolute TOA:   {symbol_toa * 1e6:.6f} us")
+print(f"Frame Absolute TOA:    {final_toa * 1e6:.6f} us  <-- USE THIS AS YOUR CALIBRATION ZERO!")
 
 # ==========================================
 # 6. VISUALIZATION (NORMALIZED)
